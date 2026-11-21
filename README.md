@@ -29,14 +29,14 @@ stable-diffusion-gui/
 │   ├── start.py             图形界面入口
 │   ├── m.py                 命令行入口
 │   ├── _paths.py            统一路径解析（把 stable-diffusion/ 加入 sys.path）
-│   ├── ui/ui_main_start.ui  Qt Designer 界面定义
+│   ├── ui/ui_main_start.ui  2023 年的旧界面定义（现由代码构建界面，仅留档）
 │   ├── tools/fetch_clip.py  预填 CLIP 缓存
 │   ├── start.spec           PyInstaller 配置
 │   ├── icon.ico
 │   └── legacy/              2023 年的旧脚本（t2img.py / my_txt2img.py，仅留档）
 │
 ├── vendor/                  第三方依赖副本（taming-transformers，不入库）
-├── output/                  出图结果与运行状态（不入库）
+├── output/YYYY-MM-DD/       出图结果，按日期分目录（不入库）
 ├── README.md
 ├── .gitignore
 └── .gitattributes
@@ -99,8 +99,18 @@ conda activate ldm
 python app/start.py
 ```
 
-模型在**第一次点击生成时**加载并常驻显存（约 8–12 秒），之后每次生成只需几秒。
-生成在后台线程进行，界面不会卡死；生成期间按钮会变为「生成中…」。
+界面特性：
+
+| 功能 | 说明 |
+|---|---|
+| 模型常驻 | 第一次点击生成时加载（约 8–12 秒），之后每次只需几秒 |
+| 负面提示词 | 独立输入框，用于压制畸形、水印等 |
+| 种子 | 可手动填写（可复现），留空则随机；右侧「随机」按钮可一键填充 |
+| 采样进度 | 进度条实时显示 `采样 x / y` |
+| 输出目录 | `output/YYYY-MM-DD/序号-种子.png`，按日期自动分目录 |
+| 后台线程 | 生成在 QThread 里跑，界面不会卡死；按钮变「生成中…」并禁用 |
+| 参数控件 | 数字都是 SpinBox，不会输入非法值；下采样因子用下拉框 |
+| 出错提示 | 弹窗显示完整堆栈，不用去看控制台 |
 
 **命令行**：
 
@@ -166,7 +176,7 @@ python app/m.py "['1', '9', '30', '512', '512', '8', '1', 'a cat']"
 ### 8.1 `m.py` 的参数格式
 
 ```powershell
-python app/m.py "[1, 9, 30, 512, 512, 8, 1, 'a cat']"
+python app/m.py "[1, 9, 30, 512, 512, 8, 1, 'a cat']" ["负面提示词"] [种子]
 ```
 
 | 位置 | 参数 | 示例 | 说明 |
@@ -180,7 +190,8 @@ python app/m.py "[1, 9, 30, 512, 512, 8, 1, 'a cat']"
 | 6 | n_iter | 1 | 迭代次数（1–100） |
 | 7 | prompt | 'a cat' | 提示词（非空字符串） |
 
-固定值（代码内写死）：通道数 `C=4`、`n_samples=1`、`ddim_eta=0.0`、采样器 `DDIM`。
+固定值（代码内写死）：通道数 `C=4`、
+_samples=1`、`ddim_eta=0.0`、采样器 `DDIM`。
 
 **数字必须写成数字**：
 

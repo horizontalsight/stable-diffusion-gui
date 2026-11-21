@@ -10,6 +10,7 @@
 
 import os
 import sys
+import time
 from pathlib import Path
 
 APP_DIR = Path(__file__).resolve().parent
@@ -21,9 +22,16 @@ CONFIG_PATH = UPSTREAM_DIR / "configs" / "stable-diffusion" / "v1-inference.yaml
 CKPT_PATH = UPSTREAM_DIR / "models" / "ldm" / "stable-diffusion-v1" / "model.ckpt"
 
 OUTPUT_DIR = REPO_ROOT / "output"
-SAMPLES_DIR = OUTPUT_DIR / "samples"
 STATE_FILE = OUTPUT_DIR / "main_is_working.txt"
 PATH_LIST = OUTPUT_DIR / "path_list.txt"
+
+
+def samples_dir(date_str=None):
+    """出图目录按日期分：output/YYYY-MM-DD/。目录不存在会自动创建。"""
+    name = date_str or time.strftime("%Y-%m-%d")
+    path = OUTPUT_DIR / name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 UI_FILE = APP_DIR / "ui" / "ui_main_start.ui"
 

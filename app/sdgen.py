@@ -107,9 +107,9 @@ def parse_params(raw):
 
 
 def latest_image():
-    """返回 output/samples 里最新的 png 路径；没有则返回 None。"""
+    """返回 output 目录下（递归，含日期子目录）最新的 png；没有则返回 None。"""
     try:
-        files = [p for p in _paths.SAMPLES_DIR.iterdir() if p.suffix.lower() == ".png"]
+        files = [p for p in _paths.OUTPUT_DIR.rglob("*.png") if p.is_file()]
     except OSError:
         return None
     if not files:
@@ -164,17 +164,21 @@ class SDGenerator:
         print("模型加载完成，用时 %.1f 秒，设备 %s" % (time.time() - t0, self.device))
         return self
 
-    def _next_index(self):
+    def _next_index(self, out_dir):
         if self._index is None:
             try:
-                self._index = len(os.listdir(str(_paths.SAMPLES_DIR))) - 1
+                self._index = len(os.listdir(str(out_dir))) - 1
             except OSError:
                 self._index = 0
         self._index += 1
         return self._index
 
-    def generate(self, params, seed=None):
-        """按 params 生成图片，返回 (图片路径, 使用的种子)。"""
+    def generate(self, params, seed=None, negative_prompt="", progress=None):
+        """按 params 生成图片，返回 (图片路径, 使用的种子)。
+
+        negative_prompt: 负面提示词；空字符串时与原行为一致。
+        progress: 可选回调 progress(step, total)，每完成一步采样调用一次。
+        """
         if not self._loaded:
             self.load()
 
@@ -188,7 +192,13 @@ class SDGenerator:
             seed = random.randint(1, 999999999)
         seed_everything(seed)
 
-        os.makedirs(str(_paths.SAMPLES_DIR), exist_ok=True)
+        negative_prompt = (negative_prompt or "").strip()
+
+        def _on_step(i):
+            if progress is not None:
+                progress(min(i + 1, ddim_steps), ddim_steps)
+
+        out_dir = _paths.samples_dir()
 
         C = 4
         n_samples = 1
@@ -205,7 +215,7 @@ class SDGenerator:
                         for prompts in data:
                             uc = None
                             if scale != 1.0:
-                                uc = self.model.get_learned_conditioning(batch_size * [""])
+                                uc = self.model.get_learned_conditioning([negative_prompt] * batch_size)
                             if isinstance(prompts, tuple):
                                 prompts = list(prompts)
                             c = self.model.get_learned_conditioning(prompts)
@@ -221,6 +231,7 @@ class SDGenerator:
                                 unconditional_conditioning=uc,
                                 eta=ddim_eta,
                                 x_T=start_code,
+                                callback=_on_step,
                             )
 
                             x_samples = self.model.decode_first_stage(samples)
@@ -234,7 +245,7 @@ class SDGenerator:
                             )
                             img = Image.fromarray(img1.astype(np.uint8))
                             img_path = os.path.join(
-                                str(_paths.SAMPLES_DIR), "%04d-%d.png" % (self._next_index(), seed)
+                                str(out_dir), "%04d-%d.png" % (self._next_index(out_dir), seed)
                             )
                             img.save(img_path)
                             print("saved:", img_path)
