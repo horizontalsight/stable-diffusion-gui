@@ -21,3 +21,6 @@ build/
 .vscode/
 Thumbs.db
 desktop.ini
+
+# 第三方依赖副本（不入库）
+vendor/
