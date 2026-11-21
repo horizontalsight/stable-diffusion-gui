@@ -24,7 +24,7 @@ from PySide2.QtWidgets import (
     QWidget,
 )
 
-from sdgen import coerce_params, get_generator, latest_image
+from sdgen import MAX_TOTAL_PIXELS, coerce_params, get_generator, latest_image
 
 # 界面缩放系数，由 detect_ui_scale() 在启动时决定（4K + 系统缩放 100% 时放大）
 UI_SCALE = 1.0
@@ -151,11 +151,12 @@ class GenerateWorker(QThread):
     fail = Signal(str)
     step = Signal(int, int)
 
-    def __init__(self, params, seed, negative_prompt, parent=None):
+    def __init__(self, params, seed, negative_prompt, sampler, parent=None):
         super().__init__(parent)
         self.params = params
         self.seed = seed
         self.negative_prompt = negative_prompt
+        self.sampler = sampler
 
     def run(self):
         try:
@@ -165,6 +166,7 @@ class GenerateWorker(QThread):
                 seed=self.seed,
                 negative_prompt=self.negative_prompt,
                 progress=lambda s, t: self.step.emit(s, t),
+                sampler=self.sampler,
             )
             self.ok.emit(path, seed)
         except Exception:
@@ -266,6 +268,9 @@ class MainWindow(QWidget):
         self.factor = QComboBox()
         self.factor.addItems(["8", "4", "16"])
 
+        self.sampler_box = QComboBox()
+        self.sampler_box.addItems(["DDIM", "PLMS", "DPM-Solver"])
+
         rows = [
             ("种子", seed_row),
             ("批次大小", self.batch),
@@ -275,6 +280,7 @@ class MainWindow(QWidget):
             ("宽度", self.width),
             ("高度", self.height),
             ("下采样因子", self.factor),
+            ("采样器", self.sampler_box),
         ]
         for row, (label_text, widget) in enumerate(rows):
             grid.addWidget(QLabel(label_text), row, 0)
@@ -283,6 +289,15 @@ class MainWindow(QWidget):
             else:
                 grid.addWidget(widget, row, 1)
         panel.addWidget(gb_param)
+
+        self.size_hint = QLabel("")
+        self.size_hint.setObjectName("hint")
+        self.size_hint.setWordWrap(True)
+        panel.addWidget(self.size_hint)
+        self.batch.valueChanged.connect(self._update_size_hint)
+        self.width.valueChanged.connect(self._update_size_hint)
+        self.height.valueChanged.connect(self._update_size_hint)
+        self._update_size_hint()
 
         self.generate_btn = QPushButton("生 成")
         self.generate_btn.setObjectName("generate")
@@ -313,6 +328,33 @@ class MainWindow(QWidget):
         panel.addStretch(1)
 
         root.addWidget(panel_widget, 0)
+
+    def _update_size_hint(self):
+        """按面积×批次估算显存（线性拟合自实测数据）。"""
+        w = self.width.value()
+        h = self.height.value()
+        batch = self.batch.value()
+        total = w * h * batch
+        # 实测: 512x512=7.7GB, 512x768=10.2GB, 640x640=10.6GB, 704x704=12.9GB
+        estimate = 3.0 + 4.7 * total / (512.0 * 512.0)
+
+        if w * h > 704 * 704:
+            self.size_hint.setText(
+                "注意：%d×%d 单张已超出安全面积（约 704×704）" % (w, h)
+            )
+            self.size_hint.setStyleSheet("color: #e06c75; font-size: 13px;")
+        elif total > MAX_TOTAL_PIXELS:
+            chunks = (batch + (MAX_TOTAL_PIXELS // (w * h)) - 1) // (MAX_TOTAL_PIXELS // (w * h))
+            self.size_hint.setText(
+                "%d×%d × 批次 %d 超出显存，将自动拆成 %d 次串行生成（约 %.1f GB/次）"
+                % (w, h, batch, chunks, estimate)
+            )
+            self.size_hint.setStyleSheet("color: #e5c07b; font-size: 13px;")
+        else:
+            self.size_hint.setText(
+                "%d×%d × 批次 %d，预计显存约 %.1f GB" % (w, h, batch, estimate)
+            )
+            self.size_hint.setStyleSheet("color: #8b9099; font-size: 13px;")
 
     @staticmethod
     def _int_spin(low, high, value, step=1):
@@ -416,7 +458,10 @@ class MainWindow(QWidget):
         else:
             self.status.setText("首次加载模型（8–12 秒）…")
 
-        self.worker = GenerateWorker(params, seed, self.negative.toPlainText().strip(), self)
+        sampler = self.sampler_box.currentText().lower().replace("-solver", "").strip()
+        self.worker = GenerateWorker(
+            params, seed, self.negative.toPlainText().strip(), sampler, self
+        )
         self.worker.step.connect(self.on_step)
         self.worker.ok.connect(self.on_done)
         self.worker.fail.connect(self.on_fail)
@@ -440,9 +485,28 @@ class MainWindow(QWidget):
         self.progress.setVisible(False)
         self.generate_btn.setEnabled(True)
         self.generate_btn.setText("生 成")
-        self.status.setText("失败")
         print(message)
-        QMessageBox.critical(self, "生成失败", message[-2000:])
+
+        if "out of memory" in message.lower():
+            self.status.setText("显存不足")
+            QMessageBox.warning(
+                self,
+                "显存不足",
+                "生成时显存溢出。\n\n"
+                "建议依次尝试：\n"
+                "1. 把宽度/高度改回 512（训练分辨率）\n"
+                "2. 把批次改回 1\n"
+                "3. 关闭其它占用显存的程序\n"
+                "4. 重启本程序（失败后显存可能残留）\n\n"
+                "分辨率对显存的影响是平方级的：\n"
+                "  512 → 约 7.7 GB\n"
+                "  640 → 约 10.6 GB\n"
+                "  704 → 约 12.9 GB\n"
+                "  768 → 超过 16 GB，会失败",
+            )
+        else:
+            self.status.setText("失败")
+            QMessageBox.critical(self, "生成失败", message[-2000:])
 
     # ---------- 其它 ----------
     def openfile(self):

@@ -13,6 +13,9 @@ import sys
 import time
 from pathlib import Path
 
+# 减少显存碎片（必须在 torch 初始化 CUDA 之前设置）
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
+
 APP_DIR = Path(__file__).resolve().parent
 REPO_ROOT = APP_DIR.parent
 
@@ -23,7 +26,6 @@ CKPT_PATH = UPSTREAM_DIR / "models" / "ldm" / "stable-diffusion-v1" / "model.ckp
 
 OUTPUT_DIR = REPO_ROOT / "output"
 STATE_FILE = OUTPUT_DIR / "main_is_working.txt"
-PATH_LIST = OUTPUT_DIR / "path_list.txt"
 
 
 def samples_dir(date_str=None):

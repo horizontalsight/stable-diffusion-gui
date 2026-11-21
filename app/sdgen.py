@@ -20,6 +20,18 @@ from pytorch_lightning import seed_everything
 import _paths
 from ldm.util import instantiate_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
+from ldm.models.diffusion.plms import PLMSSampler
+from ldm.models.diffusion.dpm_solver import DPMSolverSampler
+
+MAX_PIXELS = 704 * 704        # 单张面积上限（16 GB 卡，约 704x704）
+MAX_TOTAL_PIXELS = 620000      # 面积 × 批次上限（批次线性放大显存）
+
+SAMPLERS = {
+    "ddim": DDIMSampler,
+    "plms": PLMSSampler,
+    "dpm": DPMSolverSampler,
+    "dpm-solver": DPMSolverSampler,
+}
 
 DEFAULTS = {
     "batch_size": 1,
@@ -33,12 +45,17 @@ DEFAULTS = {
 }
 
 USAGE = """用法:
-  python app/m.py "[1, 9, 30, 512, 512, 8, 1, 'a cat']"
+  python app/m.py "[1, 9, 30, 512, 512, 8, 1, 'a cat']" ["负面提示词"] [种子] [采样器]
 
 8 个参数依次为:
   batch_size, scale, ddim_steps, H, W, f, n_iter, prompt
 
-注意: 数字要写成数字 1，不要写成字符串 '1'，否则会报 TypeError。
+可选参数:
+  负面提示词   字符串，空字符串表示不用
+  种子         整数，不填则随机
+  采样器       ddim(默认) / plms / dpm
+
+注意: 数字要写成数字 1，不要写成字符串 '1'。
 """
 
 
@@ -73,6 +90,14 @@ def coerce_params(seq):
     if not isinstance(prompt, str) or not prompt.strip():
         raise SystemExit("prompt 必须是非空字符串\n\n%s" % USAGE)
 
+    if H * W > MAX_PIXELS:
+        raise SystemExit(
+            "H×W = %d 超过上限 %d（约 704×704）\n"
+            "16 GB 显存下 768×768 会 OOM；512×768 实测约需 10.2 GB，是可用的。\n\n%s"
+            % (H * W, MAX_PIXELS, USAGE)
+        )
+
+
     if H % f or W % f:
         raise SystemExit(
             "H 和 W 必须能被下采样因子 f=%d 整除（当前 H=%d W=%d）\n\n%s" % (f, H, W, USAGE)
@@ -106,6 +131,16 @@ def parse_params(raw):
     return coerce_params(data)
 
 
+def normalize_sampler(name):
+    """把用户给的采样器名规范化；不认识就报错。"""
+    key = (name or "ddim").strip().lower()
+    if key not in SAMPLERS:
+        raise SystemExit(
+            "未知采样器: %r（可选: %s）\n\n%s" % (name, ", ".join(sorted(SAMPLERS)), USAGE)
+        )
+    return key
+
+
 def latest_image():
     """返回 output 目录下（递归，含日期子目录）最新的 png；没有则返回 None。"""
     try:
@@ -128,7 +163,7 @@ class SDGenerator:
         )
         self.verbose = verbose
         self.model = None
-        self.sampler = None
+        self.samplers = {}
         self._loaded = False
         self._index = None
 
@@ -159,10 +194,16 @@ class SDGenerator:
         model.eval()
 
         self.model = model
-        self.sampler = DDIMSampler(model)
         self._loaded = True
         print("模型加载完成，用时 %.1f 秒，设备 %s" % (time.time() - t0, self.device))
         return self
+
+    def get_sampler(self, name="ddim"):
+        """按名字取采样器（会缓存，避免重复构造）。"""
+        key = normalize_sampler(name)
+        if key not in self.samplers:
+            self.samplers[key] = SAMPLERS[key](self.model)
+        return self.samplers[key]
 
     def _next_index(self, out_dir):
         if self._index is None:
@@ -173,14 +214,19 @@ class SDGenerator:
         self._index += 1
         return self._index
 
-    def generate(self, params, seed=None, negative_prompt="", progress=None):
-        """按 params 生成图片，返回 (图片路径, 使用的种子)。
+    def generate(self, params, seed=None, negative_prompt="", progress=None, sampler="ddim"):
+        """按 params 生成图片，返回 (第一张图片路径, 使用的种子)。
 
         negative_prompt: 负面提示词；空字符串时与原行为一致。
         progress: 可选回调 progress(step, total)，每完成一步采样调用一次。
+        sampler: ddim / plms / dpm
+        batch_size > 1 时，该批次里的每张图都会保存。
         """
         if not self._loaded:
             self.load()
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         batch_size = params["batch_size"]
         scale = params["scale"]
@@ -193,6 +239,7 @@ class SDGenerator:
         seed_everything(seed)
 
         negative_prompt = (negative_prompt or "").strip()
+        sampler_obj = self.get_sampler(sampler)
 
         def _on_step(i):
             if progress is not None:
@@ -201,30 +248,38 @@ class SDGenerator:
         out_dir = _paths.samples_dir()
 
         C = 4
-        n_samples = 1
         ddim_eta = 0.0
         start_code = None
-        img_path = ""
+        first_path = ""
+        saved = []
 
-        data = [batch_size * [prompt]]
+        # 批次会线性放大显存。超出预算时自动拆成多次串行，
+        # 效果等同于"把批次 2 拆成两次批次 1"，只是多花一点时间。
+        max_parallel = max(1, MAX_TOTAL_PIXELS // (H * W))
+        inner = min(batch_size, max_parallel)
+        if inner < batch_size:
+            print(
+                "batch %d exceeds VRAM budget -> split into %d chunks of %d"
+                % (batch_size, (batch_size + inner - 1) // inner, inner)
+            )
 
         with torch.no_grad():
             with autocast("cuda"):
                 with self.model.ema_scope():
                     for _ in range(n_iter):
-                        for prompts in data:
+                        for start in range(0, batch_size, inner):
+                            chunk = min(inner, batch_size - start)
+                            prompts = [prompt] * chunk
                             uc = None
                             if scale != 1.0:
-                                uc = self.model.get_learned_conditioning([negative_prompt] * batch_size)
-                            if isinstance(prompts, tuple):
-                                prompts = list(prompts)
+                                uc = self.model.get_learned_conditioning([negative_prompt] * chunk)
                             c = self.model.get_learned_conditioning(prompts)
 
                             shape = [C, H // f, W // f]
-                            samples, _ = self.sampler.sample(
+                            samples, _ = sampler_obj.sample(
                                 S=ddim_steps,
                                 conditioning=c,
-                                batch_size=n_samples,
+                                batch_size=chunk,
                                 shape=shape,
                                 verbose=False,
                                 unconditional_guidance_scale=scale,
@@ -237,23 +292,30 @@ class SDGenerator:
                             x_samples = self.model.decode_first_stage(samples)
                             x_samples = torch.clamp((x_samples + 1.0) / 2.0, min=0.0, max=1.0)
                             x_samples = x_samples.cpu().numpy()
-
                             x_sample = 255.0 * x_samples
-                            img1 = np.stack(
-                                [x_sample[0][0, :, :], x_sample[0][1, :, :], x_sample[0][2, :, :]],
-                                axis=2,
-                            )
-                            img = Image.fromarray(img1.astype(np.uint8))
-                            img_path = os.path.join(
-                                str(out_dir), "%04d-%d.png" % (self._next_index(out_dir), seed)
-                            )
-                            img.save(img_path)
-                            print("saved:", img_path)
 
-        with open(str(_paths.PATH_LIST), "a") as fp:
-            fp.write(img_path + "_new\n")
+                            # 批次里每张都保存（原实现只存第 0 张）
+                            for b in range(x_samples.shape[0]):
+                                img1 = np.stack(
+                                    [
+                                        x_sample[b][0, :, :],
+                                        x_sample[b][1, :, :],
+                                        x_sample[b][2, :, :],
+                                    ],
+                                    axis=2,
+                                )
+                                img = Image.fromarray(img1.astype(np.uint8))
+                                path = os.path.join(
+                                    str(out_dir),
+                                    "%04d-%d.png" % (self._next_index(out_dir), seed),
+                                )
+                                img.save(path)
+                                saved.append(path)
+                                if not first_path:
+                                    first_path = path
+                                print("saved:", path)
 
-        return img_path, seed
+        return first_path, seed
 
 
 _GENERATOR = None
