@@ -1,26 +1,46 @@
 import os
-import subprocess
-import sys
 
-import _paths  # noqa: E402  必须在 PySide2 / transformers 之前导入
+import _paths  # noqa: E402  必须在 PySide2 / torch 之前导入
 
-from PySide2.QtWidgets import QApplication
+from PySide2.QtWidgets import QApplication, QMessageBox
 from PySide2.QtUiTools import QUiLoader
 from PySide2.QtGui import QPixmap, QDesktopServices
-from PySide2.QtCore import QUrl
+from PySide2.QtCore import QUrl, QThread, Signal
+
+from sdgen import coerce_params, latest_image, get_generator
 
 
-global array
-array = [0] * 8
+class GenerateWorker(QThread):
+    """在后台线程里生成，避免界面卡死。
+
+    模型只在第一次生成时加载（见 sdgen.get_generator），之后复用同一份。
+    """
+
+    ok = Signal(str, int)
+    fail = Signal(str)
+
+    def __init__(self, params, parent=None):
+        super().__init__(parent)
+        self.params = params
+
+    def run(self):
+        try:
+            generator = get_generator()
+            path, seed = generator.generate(self.params)
+            self.ok.emit(path, seed)
+        except Exception:
+            import traceback
+
+            self.fail.emit(traceback.format_exc())
 
 
 class Stats:
 
     def __init__(self):
         self.ui = QUiLoader().load(str(_paths.UI_FILE))
+        self.worker = None
 
-        path = self.load_img_init()
-        self.load_image(path)
+        self.load_image(latest_image())
 
         self.ui.generate.clicked.connect(self.click_generate)
         self.ui.open.clicked.connect(self.openfile)
@@ -36,87 +56,79 @@ class Stats:
         label.setScaledContents(True)
         if pixmap.width() > label.width() or pixmap.height() > label.height():
             ratio = min(label.width() / pixmap.width(), label.height() / pixmap.height())
-            label.setPixmap(pixmap.scaled(pixmap.width() * ratio, pixmap.height() * ratio))
+            label.setPixmap(
+                pixmap.scaled(int(pixmap.width() * ratio), int(pixmap.height() * ratio))
+            )
 
     def read_text(self, control_name):
-        control = getattr(self.ui, control_name)
-        text = control.toPlainText()
-        return text
+        return getattr(self.ui, control_name).toPlainText()
 
-    def load_img_init(self):
-        if not _paths.PATH_LIST.exists():
-            return None
-        with open(str(_paths.PATH_LIST), "r") as f:
-            lines = f.readlines()
-        if not lines:
-            return None
-        last_line = lines[-1].strip()
-        path = last_line.split("_")[0]
-        return path or None
+    def collect_params(self):
+        """把界面上的 8 个控件读成参数列表并校验。"""
+        names = ['T0', 'T1', 'T2', 'T4', 'T5', 'T6', 'T9', 'T10']
+        values = []
+        for i, name in enumerate(names):
+            text = self.read_text(name).strip()
+            try:
+                if i == 0:
+                    value = float(text) if '.' in text else int(text)
+                elif i < 7:
+                    value = int(text)
+                else:
+                    value = text
+            except ValueError:
+                raise ValueError("%s 的值 %r 不是合法数字" % (name, text))
+            values.append(value)
+        return coerce_params(values)
 
     def click_generate(self):
-        global array
-        o = False
+        if self.worker is not None and self.worker.isRunning():
+            print("still generating")
+            return
 
-        with open(str(_paths.STATE_FILE), "r") as f:
-            first_line = f.readline().strip()
-            if not first_line:
-                print("文件中没有内容")
-            elif first_line == "main's work is done":
-                # 把 "main's work is done" 改成 "main is working"
-                with open(str(_paths.STATE_FILE), "w") as f:
-                    f.write("main is working\n")
-                o = True
+        try:
+            params = self.collect_params()
+        except (ValueError, SystemExit) as exc:
+            QMessageBox.warning(None, "参数错误", str(exc))
+            return
 
-        if o == True:
-            texts = ['T0', 'T1', 'T2', 'T4', 'T5', 'T6', 'T9', 'T10']
-            array.clear()
+        print("params:", params)
 
-            for i, t in enumerate(texts):
-                text = self.read_text(t)
+        self.ui.generate.setEnabled(False)
+        self.ui.generate.setText("生成中…")
 
-                if i == 0:  # 第一个元素
-                    if '.' in text:  # 如果包含小数点，转换为浮点数
-                        value = float(text)
-                    else:  # 否则转换为整数
-                        value = int(text)
-                elif i < 7:  # t1 - t7 元素
-                    value = int(text)
-                else:  # 最后一个元素 t10
-                    value = text
+        self.worker = GenerateWorker(params, self.ui)
+        self.worker.ok.connect(self.on_done)
+        self.worker.fail.connect(self.on_fail)
+        self.worker.start()
 
-                array.append(value)
+    def on_done(self, path, seed):
+        self.load_image(path)
+        self.ui.generate.setEnabled(True)
+        self.ui.generate.setText("GENERATE")
+        print("done: %s (seed %d)" % (path, seed))
 
-            print(array)
-            print("click_generate")
-
-            script_path = _paths.APP_DIR / "m.py"
-            # 用当前解释器，避免依赖 PATH 里的 python
-            self.process = subprocess.Popen([sys.executable, str(script_path), str(array)])
-
-            o = False
-
-        if o == False:
-            print("no generate")
+    def on_fail(self, message):
+        self.ui.generate.setEnabled(True)
+        self.ui.generate.setText("GENERATE")
+        print(message)
+        QMessageBox.critical(None, "生成失败", message[-2000:])
 
     def openfile(self):
-        folder_path = str(_paths.SAMPLES_DIR)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(folder_path))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(_paths.SAMPLES_DIR)))
         print("openfile")
 
     def update_img(self):
-        path = self.load_img_init()
-        self.load_image(path)
+        self.load_image(latest_image())
 
     def quit_the_window(self):
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.wait(2000)
         self.ui.close()
 
 
 def main():
     os.makedirs(str(_paths.OUTPUT_DIR), exist_ok=True)
-    # 确保第一次的 main 能够执行
-    with open(str(_paths.STATE_FILE), "w") as f:
-        f.write("main's work is done")
 
     app = QApplication([])
     stats = Stats()
