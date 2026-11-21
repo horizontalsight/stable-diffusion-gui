@@ -1,0 +1,23 @@
+# ---------- 模型权重（体积大，不入库） ----------
+models/**/*.ckpt
+models/**/*.safetensors
+models/**/*.pt
+models/**/*.pth
+models/**/*.bin
+models/**/*.zip
+
+# ---------- 运行产物 ----------
+output/
+dist/*.exe
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+
+# ---------- IDE / 系统 ----------
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini

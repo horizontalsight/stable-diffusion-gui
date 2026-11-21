@@ -1,0 +1,15 @@
+# 统一换行符：仓库与工作区都用 LF
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.exe   binary
+*.egg   binary
+*.ckpt  binary
+*.safetensors binary
+*.pth   binary
+*.bin   binary
