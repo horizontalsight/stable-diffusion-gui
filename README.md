@@ -10,75 +10,45 @@
 
 ---
 
-## 1. 目录
-
-.\ldm          来源于上游。包括：潜空间扩散模型本体（UNet / VAE / CLIP 编码 / DDIM·PLMS·DPM 采样器）。
-
-.\configs    来源于上游。包括：训练与推理 yaml（v2-inference.yaml留作备用）。
-
-.\scripts     来源于上游。包括：txt2img / img2img / inpaint 等脚本。
-
-.\models   来源于上游。包括：模型的配置文件。
-
-.\data         来源于上游。包括：官方示例。
-
-.\assets      来源于上游。包括：README 用到的图片。
-
-.\output     来源于上游。包括：我自己运行生成的文件。
-
-.\ui              来源于上游。包括：我自己写的一些ui。
-
-.\dist           来源于上游。包括：打包生成的一些文件（不包含一个start.exe）
-
-
-
-根目录下文件：
-
-LICENSE    来源于上游。
-
-Stable_Diffusion_v1_Model_Card.md    许可条款。
-
-README.md
-
-environment.yaml    来源于上游。环境文件，并做了一些修改。
-
-setup.py    来源于上游。写明依赖。
-
-main.py    来源于上游。主程序入口。
-
-notebook_helpers.py    来源于上游。
-
-t2img.py    我自己写的程序，文生图脚本。
-
-my_txt2img.py    我自己写的程序，文生图脚本。
-
-m.py    我自己写的程序，GUI脚本。
-
-start.py     我自己写的程序，GUI入口。
-
-start.spec     我自己写的打包配置。
-
-XXXX.spec     我自己写的打包配置。
-
-icon.ico      我自己做的图标。
+## 1. 目录结构
 
 ```
-上游：
-CompVis/stable-diffusion        
-    https://github.com/CompVis/stable-diffusion
-  ┌──────────────────────────────────────────────┐
-  │ 本仓库                                        │
-  │  · 复制上游文件                                │
-  │  · 自写一些文件，并修改一些配置                   │
-  │  · output/ 为本机生成                          │
-  └──────────────────────────────────────────────┘
+stable-diffusion-gui/
+├── stable-diffusion/        官方源码与资源（CompVis 原样，勿改）
+│   ├── ldm/                 潜空间扩散模型本体（UNet / VAE / CLIP 编码 / 采样器）
+│   ├── configs/             训练与推理 yaml
+│   ├── scripts/             官方 CLI（txt2img / img2img / inpaint …）
+│   ├── data/  assets/       官方示例输入与展示图
+│   ├── models/              各模型的 config.yaml；主权重也放这里（不入库）
+│   ├── main.py              官方训练入口
+│   ├── setup.py             pip install -e stable-diffusion 用
+│   ├── environment.yaml     环境定义
+│   └── LICENSE, Stable_Diffusion_v1_Model_Card.md
+│
+├── app/                     本项目自己的代码
+│   ├── start.py             图形界面入口
+│   ├── m.py                 命令行入口
+│   ├── _paths.py            统一路径解析（把 stable-diffusion/ 加入 sys.path）
+│   ├── ui/ui_main_start.ui  Qt Designer 界面定义
+│   ├── tools/fetch_clip.py  预填 CLIP 缓存
+│   ├── start.spec           PyInstaller 配置
+│   ├── icon.ico
+│   └── legacy/              2023 年的旧脚本（t2img.py / my_txt2img.py，仅留档）
+│
+├── vendor/                  第三方依赖副本（taming-transformers，不入库）
+├── output/                  出图结果与运行状态（不入库）
+├── README.md
+├── .gitignore
+└── .gitattributes
 ```
 
-**上游作者**：Robin Rombach、Andreas Blattmann、Dominik Lorenz、Patrick Esser、Björn Ommer（LMU Munich，CompVis 组）。
-**上游许可**：CreativeML Open RAIL-M，见 `LICENSE`。
+三个目录的分工：
 
----
-
+| 目录 | 谁的东西 | 是否入库 | 能不能改 |
+|---|---|---|---|
+| `stable-diffusion/` | CompVis 官方 | 入库 | 不修改；官方更新时整块替换 |
+| `app/` | 本项目自己 | 入库 | 随便改 |
+| `vendor/` `output/` | 运行时数据 | 不入库 | 可随时删除重建 |
 ## 2. 项目安装过程
 
 1.CompVis/stable-diffusion ( 2022-11-16 ) 得到主要代码。
@@ -95,7 +65,7 @@ CompVis/stable-diffusion        
 
 ## 3. 模型权重
 
-model.ckpt（.models/ldm/stable-diffusion-v1/model.ckpt，3.97 GiB）
+model.ckpt（.stable-diffusion/models/ldm/stable-diffusion-v1/model.ckpt，3.97 GiB）
 
 地址：https://huggingface.co/CompVis/stable-diffusion-v-1-1-original/resolve/main/sd-v1-1.ckpt
 
@@ -132,7 +102,7 @@ python start.py
 **命令行**：
 
 ```powershell
-python m.py "['1', '9', '30', '512', '512', '8', '1', 'a cat']"
+python app/m.py "['1', '9', '30', '512', '512', '8', '1', 'a cat']"
 ```
 
 **参数表格**：
@@ -185,3 +155,83 @@ python m.py "['1', '9', '30', '512', '512', '8', '1', 'a cat']"
       primaryClass={cs.CV}
 }
 ```
+
+---
+
+## 8. 命令行参数与运行要点
+
+### 8.1 `m.py` 的参数格式
+
+```powershell
+python app/m.py "[1, 9, 30, 512, 512, 8, 1, 'a cat']"
+```
+
+| 位置 | 参数 | 示例 | 说明 |
+|:--:|---|---|---|
+| 0 | batch_size | 1 | 一次生成几张（1–16） |
+| 1 | scale | 9 | CFG 引导系数，必须 > 0 |
+| 2 | ddim_steps | 30 | 采样步数（1–1000） |
+| 3 | H | 512 | 高（64–1024，需能被 f 整除） |
+| 4 | W | 512 | 宽（同上） |
+| 5 | f | 8 | 下采样因子（4–32） |
+| 6 | n_iter | 1 | 迭代次数（1–100） |
+| 7 | prompt | 'a cat' | 提示词（非空字符串） |
+
+固定值（代码内写死）：通道数 `C=4`、`n_samples=1`、`ddim_eta=0.0`、采样器 `DDIM`。
+
+**数字必须写成数字**：
+
+- 正确：`[1, 9, 30, 512, 512, 8, 1, 'a cat']`
+- 错误：`['1', '9', '30', '512', '512', '8', '1', 'a cat']`
+  → `TypeError: can't multiply sequence by non-int of type 'list'`
+
+旧版用 `eval()` 解析且不做校验，报错信息不友好；现在改为 `ast.literal_eval` + 类型/范围校验，
+参数不对会直接给出可读提示，不再执行任意表达式。
+
+### 8.2 首次运行需要准备的四样东西
+
+1. **conda 环境**（Python 3.8.5 / torch 1.11.0+cu113 / PySide2 5.15.2.1）
+
+   ```powershell
+   conda env create -f environment.yaml
+   conda activate ldm
+   ```
+
+2. **主权重**：`stable-diffusion/models/ldm/stable-diffusion-v1/model.ckpt`（4.27 GB，不随仓库分发）
+
+3. **taming-transformers 必须 editable 安装**
+
+   它的 `taming/` 目录没有 `__init__.py`，`setup.py` 里的 `find_packages()` 扫不到任何包，
+   非 editable 安装会得到一个空包（`import taming` 失败）。
+
+   ```powershell
+   pip install -e vendor\taming-transformers
+   ```
+
+4. **CLIP 文本编码器**：老版 `transformers==4.19.2` 无法处理 HuggingFace 现在的
+   307 相对跳转，会报 `Can't load tokenizer`。用 `tools/fetch_clip.py` 按它的缓存规则预填：
+
+   ```powershell
+   python app\tools\fetch_clip.py
+   ```
+
+### 8.3 代理设置
+
+如果本机走 Clash 等代理，需要显式把协议写成 `http://`：
+
+```powershell
+$env:HTTP_PROXY  = "http://127.0.0.1:7890"
+$env:HTTPS_PROXY = "http://127.0.0.1:7890"
+```
+
+写成 `https://127.0.0.1:7890` 会让客户端去和代理做 TLS 握手，报
+`ProxyError: Cannot connect to proxy`。
+
+### 8.4 实测性能（RTX 4070 Ti SUPER 16 GB）
+
+| 阶段 | 耗时 |
+|---|---|
+| 加载 4.27 GB 权重 | 20–30 秒（每张图都要重来，这是当前最大的体验痛点） |
+| 30 步 DDIM 采样 | 约 5.5 秒（5.64 it/s） |
+| 单张总计 | 约 8.7 秒（不含模型加载） |
+| 显存占用 | 约 3 GB |

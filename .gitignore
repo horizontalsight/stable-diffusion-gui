@@ -1,14 +1,17 @@
-# ---------- 模型权重（体积大，不入库） ----------
-models/**/*.ckpt
-models/**/*.safetensors
-models/**/*.pt
-models/**/*.pth
-models/**/*.bin
-models/**/*.zip
+# ---------- 模型权重（任何目录下都不入库） ----------
+*.ckpt
+*.safetensors
+*.pth
+*.pt
+*.bin
+*.zip
 
 # ---------- 运行产物 ----------
 output/
 dist/*.exe
+
+# ---------- 第三方依赖副本 ----------
+vendor/
 
 # ---------- Python ----------
 __pycache__/
@@ -21,6 +24,3 @@ build/
 .vscode/
 Thumbs.db
 desktop.ini
-
-# 第三方依赖副本（不入库）
-vendor/

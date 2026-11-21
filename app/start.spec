@@ -1,12 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+# 用法（在仓库根目录执行）: pyinstaller app\start.spec
 
 block_cipher = None
 
 
 a = Analysis(
-    ['start.py'],
-    pathex=[],
+    ['app/start.py'],
+    pathex=['app'],
     binaries=[],
     datas=[],
     hiddenimports=[],
@@ -41,5 +42,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icon.ico'],
+    icon=['app/icon.ico'],
 )

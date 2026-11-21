@@ -1,4 +1,22 @@
-import os
+"""预填 CLIP 文本编码器缓存，绕过老版 transformers 的下载缺陷。
+
+背景:
+    transformers==4.19.2 在 utils/hub.py 的 get_from_cache() 中，遇到 3xx 重定向时
+    直接把响应头里的 Location 当作完整 URL 使用。而 HuggingFace 现在返回的是
+    307 + 相对路径 (/api/resolve-cache/...)，于是下载失败，最终报
+    "OSError: Can't load tokenizer for 'openai/clip-vit-large-patch14'"。
+
+做法:
+    跳过它的下载逻辑，直接按它自己的缓存命名规则 url_to_filename(url, etag)
+    把文件放到 TRANSFORMERS_CACHE 下，之后 from_pretrained 即可命中缓存。
+
+注意:
+    计算文件名时必须使用【带引号】的 etag（与 transformers 内部一致），
+    去掉引号会得到另一个文件名，缓存对不上。
+
+用法:
+    python tools/fetch_clip.py
+"""import os
 import requests
 from transformers.utils.hub import url_to_filename, TRANSFORMERS_CACHE
 

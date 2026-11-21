@@ -1,18 +1,23 @@
-import pickle
+import os
 import subprocess
 import sys
 
-from PySide2.QtWidgets import QApplication, QMessageBox,QFileDialog
+import _paths  # noqa: E402  必须在 PySide2 / transformers 之前导入
+
+from PySide2.QtWidgets import QApplication
 from PySide2.QtUiTools import QUiLoader
 from PySide2.QtGui import QPixmap, QDesktopServices
 from PySide2.QtCore import QUrl
 
+
 global array
 array = [0] * 8
+
+
 class Stats:
 
     def __init__(self):
-        self.ui = QUiLoader().load('ui/ui_main_start.ui')
+        self.ui = QUiLoader().load(str(_paths.UI_FILE))
 
         path = self.load_img_init()
         self.load_image(path)
@@ -23,6 +28,8 @@ class Stats:
         self.ui.quit.clicked.connect(self.quit_the_window)
 
     def load_image(self, path):
+        if not path or not os.path.exists(path):
+            return
         pixmap = QPixmap(path)
         label = self.ui.label_image
         label.setPixmap(pixmap)
@@ -37,25 +44,27 @@ class Stats:
         return text
 
     def load_img_init(self):
-        with open('output/path_list.txt', 'r') as f:
+        if not _paths.PATH_LIST.exists():
+            return None
+        with open(str(_paths.PATH_LIST), "r") as f:
             lines = f.readlines()
-            if not lines:
-                return None
-            last_line = lines[-1].strip()
-            path = last_line.split("_")[0]
-            return path
+        if not lines:
+            return None
+        last_line = lines[-1].strip()
+        path = last_line.split("_")[0]
+        return path or None
 
     def click_generate(self):
         global array
         o = False
 
-        with open('output/main_is_working.txt', 'r') as f:
+        with open(str(_paths.STATE_FILE), "r") as f:
             first_line = f.readline().strip()
             if not first_line:
                 print("文件中没有内容")
             elif first_line == "main's work is done":
-                #更改txt文件中的内容，把"main's work is done"改为"main is working"
-                with open('output/main_is_working.txt', 'w') as f:
+                # 把 "main's work is done" 改成 "main is working"
+                with open(str(_paths.STATE_FILE), "w") as f:
                     f.write("main is working\n")
                 o = True
 
@@ -79,12 +88,11 @@ class Stats:
                 array.append(value)
 
             print(array)
-
             print("click_generate")
 
-            script_path = "m.py"
-            process = subprocess.Popen(['python', script_path, str(array)])
-            self.process = process
+            script_path = _paths.APP_DIR / "m.py"
+            # 用当前解释器，避免依赖 PATH 里的 python
+            self.process = subprocess.Popen([sys.executable, str(script_path), str(array)])
 
             o = False
 
@@ -92,7 +100,7 @@ class Stats:
             print("no generate")
 
     def openfile(self):
-        folder_path = 'output/samples'
+        folder_path = str(_paths.SAMPLES_DIR)
         QDesktopServices.openUrl(QUrl.fromLocalFile(folder_path))
         print("openfile")
 
@@ -103,15 +111,18 @@ class Stats:
     def quit_the_window(self):
         self.ui.close()
 
+
 def main():
-    # 确保第一次的main能够执行
-    with open('output/main_is_working.txt', 'w') as f:
+    os.makedirs(str(_paths.OUTPUT_DIR), exist_ok=True)
+    # 确保第一次的 main 能够执行
+    with open(str(_paths.STATE_FILE), "w") as f:
         f.write("main's work is done")
 
     app = QApplication([])
     stats = Stats()
     stats.ui.show()
     app.exec_()
+
 
 if __name__ == "__main__":
     main()
